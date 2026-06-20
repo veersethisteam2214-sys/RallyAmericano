@@ -18,6 +18,9 @@ game scores, and shows or hides a live leaderboard.
   round's matchups.
 - Venue selection controls court labels. Bangkok Paddle uses Obanji and Pecunia;
   Sterling Sporting Center uses Court 1 and Court 2.
+- Player names can be edited during an event without changing match history.
+  Emergency add/remove actions preserve completed rounds and rebuild the active
+  and upcoming schedule for the new roster.
 
 ## Local Development
 

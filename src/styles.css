@@ -262,6 +262,18 @@ select:focus {
   font-weight: 800;
 }
 
+.player-name-input {
+  min-height: 34px;
+  padding: 5px 8px;
+  border-color: transparent;
+  background: transparent;
+  font-weight: 850;
+}
+
+.player-name-input:focus {
+  background: #ffffff;
+}
+
 .primary-button,
 .secondary-button {
   min-height: 44px;

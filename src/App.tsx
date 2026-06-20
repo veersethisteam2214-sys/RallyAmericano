@@ -139,6 +139,19 @@ function getCourtName(venueId: VenueId, court: number) {
   return venues[venueId].courts[court - 1] ?? `Court ${court}`;
 }
 
+function isRoundComplete(round: Round | undefined, pointsPerGame: number) {
+  return (
+    !!round &&
+    round.matches.length > 0 &&
+    round.matches.every(
+      (match) =>
+        typeof match.scoreA === "number" &&
+        typeof match.scoreB === "number" &&
+        match.scoreA + match.scoreB === pointsPerGame
+    )
+  );
+}
+
 function generateSchedule(
   players: Player[],
   courtCount: number,
@@ -462,22 +475,20 @@ function App() {
   const active = schedule[activeRound];
   const selectedVenue = venues[venueId];
   const maxCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
-  const currentRoundComplete =
-    !!active &&
-    active.matches.length > 0 &&
-    active.matches.every(
-      (match) =>
-        typeof match.scoreA === "number" &&
-        typeof match.scoreB === "number" &&
-        match.scoreA + match.scoreB === pointsPerGame
-    );
+  const currentRoundComplete = isRoundComplete(active, pointsPerGame);
   const coverage = useMemo(() => {
+    const currentPlayerIds = new Set(players.map((player) => player.id));
     const totalPairs = pairsOf(players.map((player) => player.id)).length;
     const partnerPairs = new Set<string>();
     schedule.forEach((round) => {
       round.matches.forEach((match) => {
-        partnerPairs.add(pairKey(match.teamA[0], match.teamA[1]));
-        partnerPairs.add(pairKey(match.teamB[0], match.teamB[1]));
+        if (match.teamA.every((id) => currentPlayerIds.has(id))) {
+          partnerPairs.add(pairKey(match.teamA[0], match.teamA[1]));
+        }
+
+        if (match.teamB.every((id) => currentPlayerIds.has(id))) {
+          partnerPairs.add(pairKey(match.teamB[0], match.teamB[1]));
+        }
       });
     });
     return {
@@ -490,16 +501,60 @@ function App() {
   function addPlayer() {
     const name = newPlayerName.trim();
     if (!name) return;
-    setPlayers((current) => [...current, { id: createId(), name }]);
+    const nextPlayers = [...players, { id: createId(), name }];
+    setPlayers(nextPlayers);
     setNewPlayerName("");
-    setSchedule([]);
-    setActiveRound(0);
+    rebuildScheduleForRosterChange(nextPlayers);
   }
 
   function removePlayer(id: string) {
-    setPlayers((current) => current.filter((player) => player.id !== id));
-    setSchedule([]);
-    setActiveRound(0);
+    const nextPlayers = players.filter((player) => player.id !== id);
+    setPlayers(nextPlayers);
+    rebuildScheduleForRosterChange(nextPlayers);
+  }
+
+  function updatePlayerName(id: string, name: string) {
+    setPlayers((current) =>
+      current.map((player) => (player.id === id ? { ...player, name } : player))
+    );
+  }
+
+  function rebuildScheduleForRosterChange(nextPlayers: Player[]) {
+    const nextMaxCourts = Math.min(recommendedCourts(nextPlayers.length), selectedVenue.courts.length);
+    const nextCourtCount = clamp(courtCount, 1, nextMaxCourts);
+    const recommendedRoundCount = recommendedRounds(nextPlayers.length, nextCourtCount);
+
+    setCourtCount(nextCourtCount);
+
+    if (!schedule.length || nextPlayers.length < 4) {
+      setSchedule([]);
+      setActiveRound(0);
+      setRoundCount(recommendedRoundCount);
+      return;
+    }
+
+    const nextSeed = scheduleSeed + 1;
+    const preservedRounds = schedule.filter(
+      (round, index) =>
+        index < activeRound || (index === activeRound && isRoundComplete(round, pointsPerGame))
+    );
+    const targetRoundCount = Math.max(recommendedRoundCount, preservedRounds.length + 1);
+    const replacementRounds = generateSchedule(nextPlayers, nextCourtCount, targetRoundCount, nextSeed);
+    const futureRounds = replacementRounds.slice(0, targetRoundCount - preservedRounds.length);
+    const rebuiltSchedule = [...preservedRounds, ...futureRounds].map((round, index) => ({
+      ...round,
+      id: `round_${index + 1}_roster_${nextSeed}`,
+      number: index + 1,
+      matches: round.matches.map((match) => ({
+        ...match,
+        id: `r${index + 1}_c${match.court}_${nextSeed}`,
+      })),
+    }));
+
+    setSchedule(rebuiltSchedule);
+    setActiveRound(Math.min(preservedRounds.length, rebuiltSchedule.length - 1));
+    setRoundCount(targetRoundCount);
+    setScheduleSeed(nextSeed);
   }
 
   function generateNewSchedule(nextSeed = scheduleSeed) {
@@ -684,7 +739,12 @@ function App() {
           <div className="player-list">
             {players.map((player) => (
               <div className="player-row" key={player.id}>
-                <span>{player.name}</span>
+                <input
+                  className="player-name-input"
+                  aria-label={`Player name for ${player.name || "unnamed player"}`}
+                  value={player.name}
+                  onChange={(event) => updatePlayerName(player.id, event.target.value)}
+                />
                 <button
                   className="ghost-icon"
                   type="button"
