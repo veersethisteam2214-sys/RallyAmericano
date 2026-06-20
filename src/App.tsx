@@ -59,6 +59,7 @@ type LeaderboardRow = {
 };
 
 type VenueId = "bangkok-paddle" | "sterling-sporting-center";
+type AppScreen = "setup" | "tracking";
 
 type PersistedState = {
   players: Player[];
@@ -561,8 +562,12 @@ function calculateLeaderboard(
 }
 
 function App() {
+  const [screen, setScreen] = useState<AppScreen>("setup");
   const [players, setPlayers] = useState<Player[]>(starterPlayers);
   const [newPlayerName, setNewPlayerName] = useState("");
+  const [trackingNewPlayerName, setTrackingNewPlayerName] = useState("");
+  const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
+  const [addingDuringEvent, setAddingDuringEvent] = useState(false);
   const [venueId, setVenueId] = useState<VenueId>("bangkok-paddle");
   const [pointsPerGame, setPointsPerGame] = useState(20);
   const [courtCount, setCourtCount] = useState(2);
@@ -620,18 +625,31 @@ function App() {
   const maxCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
   const currentRoundComplete = isRoundComplete(active, pointsPerGame);
 
-  function addPlayer() {
-    const name = newPlayerName.trim();
+  function addPlayerByName(nameInput: string) {
+    const name = nameInput.trim();
     if (!name) return;
     const nextPlayers = [...players, { id: createId(), name }];
     setPlayers(nextPlayers);
-    setNewPlayerName("");
     rebuildScheduleForRosterChange(nextPlayers);
+  }
+
+  function addPlayer() {
+    addPlayerByName(newPlayerName);
+    setNewPlayerName("");
+  }
+
+  function addTrackingPlayer() {
+    addPlayerByName(trackingNewPlayerName);
+    setTrackingNewPlayerName("");
+    setAddingDuringEvent(false);
   }
 
   function removePlayer(id: string) {
     const nextPlayers = players.filter((player) => player.id !== id);
     setPlayers(nextPlayers);
+    if (selectedPlayerId === id) {
+      setSelectedPlayerId(null);
+    }
     rebuildScheduleForRosterChange(nextPlayers);
   }
 
@@ -684,6 +702,15 @@ function App() {
     setSchedule(nextSchedule);
     setActiveRound(0);
     setScheduleSeed(nextSeed);
+  }
+
+  function startAmericano() {
+    if (!schedule.length) {
+      generateNewSchedule();
+    }
+    setSelectedPlayerId(null);
+    setAddingDuringEvent(false);
+    setScreen("tracking");
   }
 
   function refreshSchedule() {
@@ -785,12 +812,13 @@ function App() {
         </div>
       </header>
 
-      <main className="workspace">
-        <section className="setup-panel" aria-label="Event setup">
+      {screen === "setup" ? (
+        <main className="start-screen">
+          <section className="setup-panel start-panel" aria-label="Event setup">
           <div className="section-title">
             <div>
-              <p className="eyebrow">Setup</p>
-              <h2>Event controls</h2>
+              <p className="eyebrow">Roster first</p>
+              <h2>Players</h2>
             </div>
             <button className="icon-button" type="button" onClick={applyRecommended} title="Recommended setup">
               <RotateCcw size={18} />
@@ -885,13 +913,83 @@ function App() {
           </div>
 
           <div className="action-row">
-            <button className="primary-button" type="button" disabled={players.length < 4} onClick={() => generateNewSchedule()}>
-              <Shuffle size={18} /> Generate
-            </button>
-            <button className="secondary-button" type="button" disabled={!schedule.length} onClick={refreshSchedule}>
-              <RotateCcw size={18} /> Reshuffle
+            <button className="start-button" type="button" disabled={players.length < 4} onClick={startAmericano}>
+              <Shuffle size={18} /> Start AMERICANO
             </button>
           </div>
+        </section>
+        </main>
+      ) : (
+      <main className="workspace tracking-workspace">
+        <section className="participants-panel" aria-label="Participants">
+          <div className="section-title">
+            <div>
+              <p className="eyebrow">Event roster</p>
+              <h2>Participants</h2>
+            </div>
+            <button
+              className="primary-icon"
+              type="button"
+              onClick={() => {
+                setAddingDuringEvent((current) => !current);
+                setSelectedPlayerId(null);
+              }}
+              title="Add player"
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+
+          {addingDuringEvent ? (
+            <div className="inline-editor">
+              <input
+                type="text"
+                value={trackingNewPlayerName}
+                onChange={(event) => setTrackingNewPlayerName(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addTrackingPlayer();
+                }}
+                placeholder="Player name"
+              />
+              <button className="primary-button" type="button" onClick={addTrackingPlayer}>
+                Add
+              </button>
+            </div>
+          ) : null}
+
+          <div className="participant-chip-grid">
+            {players.map((player) => (
+              <button
+                key={player.id}
+                className={selectedPlayerId === player.id ? "participant-chip active" : "participant-chip"}
+                type="button"
+                onClick={() => {
+                  setSelectedPlayerId((current) => (current === player.id ? null : player.id));
+                  setAddingDuringEvent(false);
+                }}
+              >
+                {player.name || "Unnamed"}
+              </button>
+            ))}
+          </div>
+
+          {selectedPlayerId ? (
+            <div className="inline-editor">
+              <input
+                type="text"
+                value={players.find((player) => player.id === selectedPlayerId)?.name ?? ""}
+                onChange={(event) => updatePlayerName(selectedPlayerId, event.target.value)}
+                aria-label="Edit selected player"
+              />
+              <button className="secondary-button danger-button" type="button" onClick={() => removePlayer(selectedPlayerId)}>
+                <Trash2 size={16} /> Delete
+              </button>
+            </div>
+          ) : null}
+
+          <button className="secondary-button full-width-button" type="button" onClick={() => setScreen("setup")}>
+            Edit event setup
+          </button>
         </section>
 
         <section className="round-panel" aria-label="Round scoring">
@@ -1051,6 +1149,7 @@ function App() {
           </div>
         </aside>
       </main>
+      )}
     </div>
   );
 }

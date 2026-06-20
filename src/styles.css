@@ -117,6 +117,16 @@ button:disabled {
   white-space: nowrap;
 }
 
+.start-screen {
+  min-height: calc(100vh - 104px);
+  padding: 26px clamp(16px, 4vw, 42px) 42px;
+}
+
+.start-panel {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(330px, 400px) minmax(440px, 1fr) minmax(300px, 360px);
@@ -125,7 +135,12 @@ button:disabled {
   align-items: start;
 }
 
+.tracking-workspace {
+  grid-template-columns: minmax(260px, 320px) minmax(440px, 1fr) minmax(300px, 360px);
+}
+
 .setup-panel,
+.participants-panel,
 .round-panel,
 .leaderboard-panel {
   background: rgba(11, 18, 32, 0.94);
@@ -135,6 +150,7 @@ button:disabled {
 }
 
 .setup-panel,
+.participants-panel,
 .round-panel,
 .leaderboard-panel {
   padding: 16px;
@@ -284,6 +300,22 @@ select:focus {
   flex: 1;
 }
 
+.start-button {
+  min-height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  border: 1px solid var(--blue);
+  border-radius: 8px;
+  background: var(--blue);
+  color: #ffffff;
+  font-size: 1rem;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
 .secondary-button {
   background: #0a1425;
   color: var(--ink);
@@ -292,6 +324,51 @@ select:focus {
 
 .action-row {
   margin-top: 14px;
+}
+
+.participant-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.participant-chip {
+  min-height: 42px;
+  padding: 8px 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #07101f;
+  color: var(--ink);
+  font-weight: 850;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.participant-chip.active {
+  border-color: var(--line-bright);
+  background: #0b1b36;
+  color: var(--cyan);
+}
+
+.inline-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.full-width-button {
+  width: 100%;
+  margin-top: 14px;
+}
+
+.danger-button {
+  color: #ffffff;
+  border-color: rgba(255, 96, 112, 0.5);
+  background: rgba(255, 96, 112, 0.14);
 }
 
 .round-toolbar {
@@ -573,6 +650,10 @@ select:focus {
   .leaderboard-panel {
     grid-column: 1 / -1;
   }
+
+  .participants-panel {
+    grid-row: span 2;
+  }
 }
 
 @media (max-width: 900px) {
@@ -606,7 +687,8 @@ select:focus {
   }
 
   .field-grid,
-  .match-board {
+  .match-board,
+  .inline-editor {
     grid-template-columns: 1fr;
   }
 
