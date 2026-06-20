@@ -34,6 +34,19 @@ type Round = {
   resting: string[];
 };
 
+type PartnerPair = [string, string];
+
+type MatchPlan = {
+  teamA: PartnerPair;
+  teamB: PartnerPair;
+};
+
+type RoundPlan = {
+  partnerPairs: PartnerPair[];
+  matches: MatchPlan[];
+  score: number;
+};
+
 type LeaderboardRow = {
   id: string;
   name: string;
@@ -41,6 +54,7 @@ type LeaderboardRow = {
   played: number;
   wins: number;
   diff: number;
+  rests: number;
   average: number;
 };
 
@@ -59,6 +73,7 @@ type PersistedState = {
 };
 
 const STORAGE_KEY = "rally-americano-state-v1";
+const REST_BONUS_POINTS = 10;
 
 const venues: Record<
   VenueId,
@@ -192,11 +207,11 @@ function generateCycle(
 ): Round[] {
   const ids = players.map((player) => player.id);
   const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
+  const pairSlots = courts * 2;
   const playCounts = new Map<string, number>();
   const restCounts = new Map<string, number>();
-  const partnerCounts = new Map<string, number>();
   const opponentCounts = new Map<string, number>();
-  const totalPartnerPairs = pairsOf(ids).length;
+  const uncoveredPairs = new Set(pairsOf(ids));
   let previousResting = new Set<string>();
 
   ids.forEach((id) => {
@@ -207,58 +222,44 @@ function generateCycle(
   const schedule: Round[] = [];
 
   for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
-    const used = new Set<string>();
-    const matches: Match[] = [];
-
-    for (let court = 1; court <= courts; court += 1) {
-      const candidate = bestCandidate({
-        ids,
-        used,
-        playCounts,
-        restCounts,
-        partnerCounts,
-        opponentCounts,
-        previousResting,
-        freshPartnersNeeded: countCoveredPartnerPairs(partnerCounts) < totalPartnerPairs,
-        seed,
-        roundIndex,
-        court,
-      });
-
-      if (!candidate) break;
-
-      [...candidate.teamA, ...candidate.teamB].forEach((id) => {
-        used.add(id);
-        playCounts.set(id, (playCounts.get(id) ?? 0) + 1);
-      });
-
-      const partners = [
-        pairKey(candidate.teamA[0], candidate.teamA[1]),
-        pairKey(candidate.teamB[0], candidate.teamB[1]),
-      ];
-      const opponents = candidate.teamA.flatMap((a) =>
-        candidate.teamB.map((b) => pairKey(a, b))
-      );
-
-      partners.forEach((key) => partnerCounts.set(key, (partnerCounts.get(key) ?? 0) + 1));
-      opponents.forEach((key) => opponentCounts.set(key, (opponentCounts.get(key) ?? 0) + 1));
-
-      matches.push({
-        id: `r${roundIndex + 1}_c${court}_${seed}`,
-        court,
-        teamA: candidate.teamA,
-        teamB: candidate.teamB,
-      });
-    }
-
+    const roundPlan = bestRoundPlan({
+      ids,
+      pairSlots,
+      playCounts,
+      restCounts,
+      opponentCounts,
+      uncoveredPairs,
+      previousResting,
+      seed,
+      roundIndex,
+    });
+    const used = new Set(roundPlan.partnerPairs.flat());
     const resting = ids.filter((id) => !used.has(id));
+
+    roundPlan.partnerPairs.forEach(([a, b]) => uncoveredPairs.delete(pairKey(a, b)));
+    roundPlan.matches.forEach((match) => {
+      match.teamA.forEach((a) => {
+        match.teamB.forEach((b) => {
+          const key = pairKey(a, b);
+          opponentCounts.set(key, (opponentCounts.get(key) ?? 0) + 1);
+        });
+      });
+    });
+    roundPlan.partnerPairs.flat().forEach((id) => {
+      playCounts.set(id, (playCounts.get(id) ?? 0) + 1);
+    });
     resting.forEach((id) => restCounts.set(id, (restCounts.get(id) ?? 0) + 1));
     previousResting = new Set(resting);
 
     schedule.push({
       id: `round_${roundIndex + 1}_${seed}`,
       number: roundIndex + 1,
-      matches,
+      matches: roundPlan.matches.map((match, index) => ({
+        id: `r${roundIndex + 1}_c${index + 1}_${seed}`,
+        court: index + 1,
+        teamA: match.teamA,
+        teamB: match.teamB,
+      })),
       resting,
     });
   }
@@ -266,8 +267,135 @@ function generateCycle(
   return schedule;
 }
 
-function countCoveredPartnerPairs(partnerCounts: Map<string, number>) {
-  return Array.from(partnerCounts.values()).filter((count) => count > 0).length;
+function bestRoundPlan(args: {
+  ids: string[];
+  pairSlots: number;
+  playCounts: Map<string, number>;
+  restCounts: Map<string, number>;
+  opponentCounts: Map<string, number>;
+  uncoveredPairs: Set<string>;
+  previousResting: Set<string>;
+  seed: number;
+  roundIndex: number;
+}): RoundPlan {
+  const combos = partnerPairCombos(args.ids, Math.min(args.pairSlots, Math.floor(args.ids.length / 2)));
+  let best: RoundPlan | null = null;
+
+  combos.forEach((partnerPairs) => {
+    const matchPlans = matchPairings(partnerPairs);
+    matchPlans.forEach((matches) => {
+      const score = roundPlanScore({ ...args, partnerPairs, matches });
+      if (!best || score > best.score) {
+        best = { partnerPairs, matches, score };
+      }
+    });
+  });
+
+  return best ?? { partnerPairs: [], matches: [], score: 0 };
+}
+
+function partnerPairCombos(ids: string[], targetPairs: number): PartnerPair[][] {
+  const allPairs: PartnerPair[] = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      allPairs.push([ids[i], ids[j]]);
+    }
+  }
+
+  const combos: PartnerPair[][] = [];
+
+  function walk(start: number, chosen: PartnerPair[], used: Set<string>) {
+    if (chosen.length === targetPairs) {
+      combos.push(chosen.map((pair) => [...pair] as PartnerPair));
+      return;
+    }
+
+    for (let index = start; index < allPairs.length; index += 1) {
+      const [a, b] = allPairs[index];
+      if (used.has(a) || used.has(b)) continue;
+      used.add(a);
+      used.add(b);
+      chosen.push([a, b]);
+      walk(index + 1, chosen, used);
+      chosen.pop();
+      used.delete(a);
+      used.delete(b);
+    }
+  }
+
+  walk(0, [], new Set());
+  return combos;
+}
+
+function matchPairings(partnerPairs: PartnerPair[]): MatchPlan[][] {
+  if (partnerPairs.length < 2) return [];
+  const plans: MatchPlan[][] = [];
+
+  function walk(remaining: PartnerPair[], matches: MatchPlan[]) {
+    if (remaining.length === 0) {
+      plans.push(matches.map((match) => ({ teamA: [...match.teamA] as PartnerPair, teamB: [...match.teamB] as PartnerPair })));
+      return;
+    }
+
+    const first = remaining[0];
+    for (let index = 1; index < remaining.length; index += 1) {
+      const next = remaining[index];
+      const rest = remaining.filter((_, restIndex) => restIndex !== 0 && restIndex !== index);
+      matches.push({ teamA: first, teamB: next });
+      walk(rest, matches);
+      matches.pop();
+    }
+  }
+
+  walk(partnerPairs, []);
+  return plans;
+}
+
+function roundPlanScore(args: {
+  ids: string[];
+  partnerPairs: PartnerPair[];
+  matches: MatchPlan[];
+  playCounts: Map<string, number>;
+  restCounts: Map<string, number>;
+  opponentCounts: Map<string, number>;
+  uncoveredPairs: Set<string>;
+  previousResting: Set<string>;
+  seed: number;
+  roundIndex: number;
+}) {
+  const playing = args.partnerPairs.flat();
+  const playingSet = new Set(playing);
+  const resting = args.ids.filter((id) => !playingSet.has(id));
+  const minPlayed = Math.min(...Array.from(args.playCounts.values()));
+  const minRested = Math.min(...Array.from(args.restCounts.values()));
+
+  const partnerCoverage = args.partnerPairs.reduce(
+    (sum, pair) => sum + (args.uncoveredPairs.has(pairKey(pair[0], pair[1])) ? 10000 : -100),
+    0
+  );
+  const playBalance = playing.reduce(
+    (sum, id) => sum + (minPlayed + 1 - (args.playCounts.get(id) ?? 0)) * 16,
+    0
+  );
+  const restBalance = resting.reduce((sum, id) => {
+    const restCount = args.restCounts.get(id) ?? 0;
+    return sum + (restCount === minRested ? 120 : -20) - (args.previousResting.has(id) ? 140 : 0);
+  }, 0);
+  const opponentNovelty = args.matches.reduce((sum, match) => {
+    return (
+      sum +
+      match.teamA.reduce((teamSum, a) => {
+        return (
+          teamSum +
+          match.teamB.reduce((pairSum, b) => pairSum + 20 / (1 + (args.opponentCounts.get(pairKey(a, b)) ?? 0)), 0)
+        );
+      }, 0)
+    );
+  }, 0);
+  const stableNoise =
+    (hashText(`${playing.join("")}_${resting.join("")}_${args.seed}_${args.roundIndex}`) % 1000) / 1000;
+
+  return partnerCoverage + playBalance + restBalance + opponentNovelty + stableNoise;
 }
 
 function bestCandidate(args: {
@@ -363,7 +491,12 @@ function candidateScore(
   return playBalance + restBalance + restReturn + partnerNovelty + opponentNovelty + stableNoise;
 }
 
-function calculateLeaderboard(players: Player[], schedule: Round[], pointsPerGame: number): LeaderboardRow[] {
+function calculateLeaderboard(
+  players: Player[],
+  schedule: Round[],
+  pointsPerGame: number,
+  activeRound: number
+): LeaderboardRow[] {
   const rows = new Map<string, LeaderboardRow>();
   players.forEach((player) => {
     rows.set(player.id, {
@@ -373,11 +506,21 @@ function calculateLeaderboard(players: Player[], schedule: Round[], pointsPerGam
       played: 0,
       wins: 0,
       diff: 0,
+      rests: 0,
       average: 0,
     });
   });
 
-  schedule.forEach((round) => {
+  schedule.forEach((round, roundIndex) => {
+    if (roundIndex <= activeRound) {
+      round.resting.forEach((id) => {
+        const row = rows.get(id);
+        if (!row) return;
+        row.points += REST_BONUS_POINTS;
+        row.rests += 1;
+      });
+    }
+
     round.matches.forEach((match) => {
       const scoreA = match.scoreA;
       const scoreB = match.scoreB;
@@ -414,7 +557,7 @@ function calculateLeaderboard(players: Player[], schedule: Round[], pointsPerGam
       ...row,
       average: row.played ? row.points / row.played : 0,
     }))
-    .sort((a, b) => b.points - a.points || b.diff - a.diff || b.average - a.average || a.name.localeCompare(b.name));
+    .sort((a, b) => b.points - a.points || b.wins - a.wins || b.average - a.average || a.name.localeCompare(b.name));
 }
 
 function App() {
@@ -469,34 +612,13 @@ function App() {
   }, [players.length, venueId]);
 
   const leaderboard = useMemo(
-    () => calculateLeaderboard(players, schedule, pointsPerGame),
-    [players, pointsPerGame, schedule]
+    () => calculateLeaderboard(players, schedule, pointsPerGame, activeRound),
+    [activeRound, players, pointsPerGame, schedule]
   );
   const active = schedule[activeRound];
   const selectedVenue = venues[venueId];
   const maxCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
   const currentRoundComplete = isRoundComplete(active, pointsPerGame);
-  const coverage = useMemo(() => {
-    const currentPlayerIds = new Set(players.map((player) => player.id));
-    const totalPairs = pairsOf(players.map((player) => player.id)).length;
-    const partnerPairs = new Set<string>();
-    schedule.forEach((round) => {
-      round.matches.forEach((match) => {
-        if (match.teamA.every((id) => currentPlayerIds.has(id))) {
-          partnerPairs.add(pairKey(match.teamA[0], match.teamA[1]));
-        }
-
-        if (match.teamB.every((id) => currentPlayerIds.has(id))) {
-          partnerPairs.add(pairKey(match.teamB[0], match.teamB[1]));
-        }
-      });
-    });
-    return {
-      covered: partnerPairs.size,
-      total: totalPairs,
-      percent: totalPairs ? Math.round((partnerPairs.size / totalPairs) * 100) : 0,
-    };
-  }, [players, schedule]);
 
   function addPlayer() {
     const name = newPlayerName.trim();
@@ -736,6 +858,11 @@ function App() {
             </button>
           </div>
 
+          <div className="roster-heading">
+            <span>Participants</span>
+            <strong>{players.length}</strong>
+          </div>
+
           <div className="player-list">
             {players.map((player) => (
               <div className="player-row" key={player.id}>
@@ -764,18 +891,6 @@ function App() {
             <button className="secondary-button" type="button" disabled={!schedule.length} onClick={refreshSchedule}>
               <RotateCcw size={18} /> Reshuffle
             </button>
-          </div>
-
-          <div className="coverage-meter">
-            <div>
-              <span>Partner coverage</span>
-              <strong>
-                {coverage.covered}/{coverage.total}
-              </strong>
-            </div>
-            <div className="meter-track">
-              <span style={{ width: `${coverage.percent}%` }} />
-            </div>
           </div>
         </section>
 
@@ -819,25 +934,44 @@ function App() {
               <div className="matches-grid">
                 {active.matches.map((match) => (
                   <article className="match-card" key={match.id}>
-                    <div className="court-lines" aria-hidden="true" />
                     <div className="match-heading">
                       <span>{getCourtName(venueId, match.court)}</span>
                       <strong>{pointsPerGame} total</strong>
                     </div>
-                    <ScoreTeam
-                      label="Team A"
-                      players={match.teamA.map((id) => getPlayerName(players, id))}
-                      value={match.scoreA}
-                      max={pointsPerGame}
-                      onChange={(value) => updateScore(active.id, match.id, "A", value)}
-                    />
-                    <ScoreTeam
-                      label="Team B"
-                      players={match.teamB.map((id) => getPlayerName(players, id))}
-                      value={match.scoreB}
-                      max={pointsPerGame}
-                      onChange={(value) => updateScore(active.id, match.id, "B", value)}
-                    />
+                    <div className="match-board">
+                      <TeamStack
+                        label="Same side"
+                        players={match.teamA.map((id) => getPlayerName(players, id))}
+                      />
+                      <div className="score-column">
+                        <span>Score</span>
+                        <div className="scoreline">
+                          <input
+                            aria-label={`${getCourtName(venueId, match.court)} same side score`}
+                            type="number"
+                            min={0}
+                            max={pointsPerGame}
+                            value={match.scoreA ?? ""}
+                            onChange={(event) => updateScore(active.id, match.id, "A", event.target.value)}
+                            placeholder="0"
+                          />
+                          <strong>-</strong>
+                          <input
+                            aria-label={`${getCourtName(venueId, match.court)} other side score`}
+                            type="number"
+                            min={0}
+                            max={pointsPerGame}
+                            value={match.scoreB ?? ""}
+                            onChange={(event) => updateScore(active.id, match.id, "B", event.target.value)}
+                            placeholder="0"
+                          />
+                        </div>
+                      </div>
+                      <TeamStack
+                        label="Other side"
+                        players={match.teamB.map((id) => getPlayerName(players, id))}
+                      />
+                    </div>
                   </article>
                 ))}
               </div>
@@ -905,12 +1039,12 @@ function App() {
                 <div className="leaderboard-name">
                   <strong>{row.name}</strong>
                   <span>
-                    {row.played} played - {row.wins} wins
+                    {row.played} played - {row.rests} rested
                   </span>
                 </div>
                 <div className="leaderboard-score">
                   <strong>{row.points}</strong>
-                  <span>{row.diff >= 0 ? "+" : ""}{row.diff}</span>
+                  <span>{row.wins} wins</span>
                 </div>
               </div>
             ))}
@@ -921,28 +1055,16 @@ function App() {
   );
 }
 
-function ScoreTeam(props: {
+function TeamStack(props: {
   label: string;
   players: string[];
-  value?: number;
-  max: number;
-  onChange: (value: string) => void;
 }) {
   return (
-    <div className="score-team">
-      <div>
-        <span>{props.label}</span>
-        <strong>{props.players.join(" / ")}</strong>
-      </div>
-      <input
-        aria-label={`${props.label} score`}
-        type="number"
-        min={0}
-        max={props.max}
-        value={props.value ?? ""}
-        onChange={(event) => props.onChange(event.target.value)}
-        placeholder="0"
-      />
+    <div className="team-stack">
+      <span>{props.label}</span>
+      {props.players.map((player) => (
+        <strong key={player}>{player}</strong>
+      ))}
     </div>
   );
 }

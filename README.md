@@ -10,8 +10,9 @@ game scores, and shows or hides a live leaderboard.
   is 20 points.
 - The two team scores always add up to the selected match total.
 - Every player receives the points earned by their team in that match.
-- The leaderboard ranks players by total points, then point difference, then
-  average points per match.
+- The leaderboard ranks players by total points, then wins, then average points
+  per played match.
+- Resting players automatically receive 10 points for the round.
 - The generator favors fresh partners, fresh opponents, balanced play counts, and
   rotating rest players when the player count is not divisible by four.
 - After a full partner cycle is generated, extra rounds repeat from the first
@@ -34,6 +35,15 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Simulation Check
+
+```bash
+npm run test:sim
+```
+
+The simulation fills a full event with deterministic random scores, then checks
+that all partner pairs appear and rest counts stay balanced.
 
 Vercel can deploy this as a Vite app with the default build command and output
 directory.
