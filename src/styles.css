@@ -83,6 +83,20 @@ button:disabled {
   line-height: 0.95;
 }
 
+.brand-lockup {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: clamp(118px, 15vw, 190px);
+  height: auto;
+  display: block;
+  flex: 0 0 auto;
+}
+
 .eyebrow {
   margin: 0 0 6px;
   color: var(--cyan);
@@ -125,6 +139,13 @@ button:disabled {
 .start-panel {
   max-width: 980px;
   margin: 0 auto;
+}
+
+.start-logo {
+  display: block;
+  width: min(420px, 78vw);
+  height: auto;
+  margin: 4px auto 20px;
 }
 
 .workspace {
@@ -209,6 +230,28 @@ button:disabled {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin: 18px 0 14px;
+}
+
+.auto-rounds-card {
+  min-height: 42px;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #07101f;
+}
+
+.auto-rounds-card span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.auto-rounds-card strong {
+  color: var(--cyan);
+  font-size: 1.08rem;
 }
 
 label span,
@@ -661,6 +704,12 @@ select:focus {
     position: static;
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .brand-lockup {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .topbar-stats {

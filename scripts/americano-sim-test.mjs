@@ -1,7 +1,24 @@
 const POINTS_PER_GAME = 20;
 const REST_BONUS_POINTS = 10;
 
-const baseNames = ["Vira", "Krish", "Arnav", "Arjun", "Kevin", "Leo", "Tiu", "Sam", "Maya", "Noah"];
+const baseNames = [
+  "Vira",
+  "Krish",
+  "Arnav",
+  "Arjun",
+  "Kevin",
+  "Leo",
+  "Tiu",
+  "Sam",
+  "Maya",
+  "Noah",
+  "Ishan",
+  "Nina",
+  "Owen",
+  "Rhea",
+  "Dev",
+  "Mila",
+];
 
 function makePlayers(count) {
   return baseNames.slice(0, count).map((name, index) => ({
@@ -44,6 +61,42 @@ function recommendedRounds(playerCount, courtCount) {
   if (playerCount < 4) return 0;
   const pairTotal = (playerCount * (playerCount - 1)) / 2;
   return clamp(Math.ceil(pairTotal / Math.max(1, courtCount * 2)), 1, 72);
+}
+
+function completeCycleRoundCount(players, courtCount, seed) {
+  if (players.length < 4) return 0;
+  const courts = clamp(courtCount, 1, recommendedCourts(players.length));
+  const minimumRounds = recommendedRounds(players.length, courts);
+
+  for (let roundCount = minimumRounds; roundCount <= 72; roundCount += 1) {
+    const cycle = generateCycle(players, courts, roundCount, seed);
+    const coverage = scheduleCoverage(players, cycle);
+    if (coverage.missingPairs === 0 && coverage.restSpread <= 1) return roundCount;
+  }
+
+  return minimumRounds;
+}
+
+function scheduleCoverage(players, schedule) {
+  const ids = players.map((player) => player.id);
+  const expectedPairs = new Set(pairsOf(ids));
+  const partnerPairs = new Set();
+  const restCounts = new Map(ids.map((id) => [id, 0]));
+
+  schedule.forEach((round) => {
+    round.resting.forEach((id) => restCounts.set(id, (restCounts.get(id) ?? 0) + 1));
+    round.matches.forEach((match) => {
+      partnerPairs.add(pairKey(match.teamA[0], match.teamA[1]));
+      partnerPairs.add(pairKey(match.teamB[0], match.teamB[1]));
+    });
+  });
+
+  const rests = Array.from(restCounts.values());
+
+  return {
+    missingPairs: Array.from(expectedPairs).filter((pair) => !partnerPairs.has(pair)).length,
+    restSpread: rests.length ? Math.max(...rests) - Math.min(...rests) : 0,
+  };
 }
 
 function generateCycle(roster, courtCount, roundCount, seed) {
@@ -216,7 +269,7 @@ function generateSchedule(roster, courtCount, roundCount, seed) {
   const ids = roster.map((player) => player.id);
   if (ids.length < 4 || roundCount === 0) return [];
   const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
-  const baseCycleLength = recommendedRounds(ids.length, courts);
+  const baseCycleLength = completeCycleRoundCount(roster, courts, seed);
   const baseCycle = generateCycle(roster, courts, baseCycleLength, seed);
 
   return Array.from({ length: roundCount }, (_, index) => ({
@@ -278,7 +331,7 @@ function summarize(players, schedule) {
 function runScenario(playerCount) {
   const players = makePlayers(playerCount);
   const courtCount = 2;
-  const roundCount = recommendedRounds(players.length, courtCount);
+  const roundCount = completeCycleRoundCount(players, courtCount, 21 + playerCount);
   const scoredSchedule = scoreRandomly(generateSchedule(players, courtCount, roundCount, 21 + playerCount));
   const result = summarize(players, scoredSchedule);
 
@@ -293,10 +346,8 @@ function runScenario(playerCount) {
   return result;
 }
 
-const results = {
-  "8_players": runScenario(8),
-  "9_players": runScenario(9),
-  "10_players": runScenario(10),
-};
+const results = Object.fromEntries(
+  [6, 7, 8, 9, 10, 11, 12].map((playerCount) => [`${playerCount}_players`, runScenario(playerCount)])
+);
 
 console.log(JSON.stringify(results, null, 2));

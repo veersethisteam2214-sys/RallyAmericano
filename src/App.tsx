@@ -75,6 +75,7 @@ type PersistedState = {
 
 const STORAGE_KEY = "rally-americano-state-v1";
 const REST_BONUS_POINTS = 10;
+const LOGO_SRC = "/rally-logo-cropped.png";
 
 const venues: Record<
   VenueId,
@@ -147,6 +148,45 @@ function recommendedRounds(playerCount: number, courtCount: number) {
   return clamp(Math.ceil(pairTotal / Math.max(1, courtCount * 2)), 1, 72);
 }
 
+function completeCycleRoundCount(players: Player[], courtCount: number, seed: number) {
+  if (players.length < 4) return 0;
+
+  const courts = clamp(courtCount, 1, recommendedCourts(players.length));
+  const minimumRounds = recommendedRounds(players.length, courts);
+
+  for (let roundCount = minimumRounds; roundCount <= 72; roundCount += 1) {
+    const cycle = generateCycle(players, courts, roundCount, seed);
+    const coverage = scheduleCoverage(players, cycle);
+    if (coverage.missingPairs === 0 && coverage.restSpread <= 1) {
+      return roundCount;
+    }
+  }
+
+  return minimumRounds;
+}
+
+function scheduleCoverage(players: Player[], schedule: Round[]) {
+  const ids = players.map((player) => player.id);
+  const expectedPairs = new Set(pairsOf(ids));
+  const partnerPairs = new Set<string>();
+  const restCounts = new Map(ids.map((id) => [id, 0]));
+
+  schedule.forEach((round) => {
+    round.resting.forEach((id) => restCounts.set(id, (restCounts.get(id) ?? 0) + 1));
+    round.matches.forEach((match) => {
+      partnerPairs.add(pairKey(match.teamA[0], match.teamA[1]));
+      partnerPairs.add(pairKey(match.teamB[0], match.teamB[1]));
+    });
+  });
+
+  const rests = Array.from(restCounts.values());
+
+  return {
+    missingPairs: Array.from(expectedPairs).filter((pair) => !partnerPairs.has(pair)).length,
+    restSpread: rests.length ? Math.max(...rests) - Math.min(...rests) : 0,
+  };
+}
+
 function getPlayerName(players: Player[], id: string) {
   return players.find((player) => player.id === id)?.name ?? "Removed player";
 }
@@ -179,7 +219,7 @@ function generateSchedule(
   const rounds = Math.max(0, roundCount);
   if (ids.length < 4 || rounds === 0) return [];
 
-  const baseCycleLength = recommendedRounds(ids.length, courts);
+  const baseCycleLength = completeCycleRoundCount(players, courts, seed);
   const baseCycle = generateCycle(players, courts, baseCycleLength, seed);
 
   return Array.from({ length: rounds }, (_, index) => {
@@ -623,6 +663,10 @@ function App() {
   const active = schedule[activeRound];
   const selectedVenue = venues[venueId];
   const maxCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
+  const automaticRoundCount = useMemo(
+    () => completeCycleRoundCount(players, courtCount, scheduleSeed),
+    [courtCount, players, scheduleSeed]
+  );
   const currentRoundComplete = isRoundComplete(active, pointsPerGame);
 
   function addPlayerByName(nameInput: string) {
@@ -662,7 +706,7 @@ function App() {
   function rebuildScheduleForRosterChange(nextPlayers: Player[]) {
     const nextMaxCourts = Math.min(recommendedCourts(nextPlayers.length), selectedVenue.courts.length);
     const nextCourtCount = clamp(courtCount, 1, nextMaxCourts);
-    const recommendedRoundCount = recommendedRounds(nextPlayers.length, nextCourtCount);
+    const recommendedRoundCount = completeCycleRoundCount(nextPlayers, nextCourtCount, scheduleSeed + 1);
 
     setCourtCount(nextCourtCount);
 
@@ -698,16 +742,16 @@ function App() {
   }
 
   function generateNewSchedule(nextSeed = scheduleSeed) {
-    const nextSchedule = generateSchedule(players, courtCount, roundCount, nextSeed);
+    const nextRoundCount = completeCycleRoundCount(players, courtCount, nextSeed);
+    const nextSchedule = generateSchedule(players, courtCount, nextRoundCount, nextSeed);
     setSchedule(nextSchedule);
     setActiveRound(0);
+    setRoundCount(nextRoundCount);
     setScheduleSeed(nextSeed);
   }
 
   function startAmericano() {
-    if (!schedule.length) {
-      generateNewSchedule();
-    }
+    generateNewSchedule();
     setSelectedPlayerId(null);
     setAddingDuringEvent(false);
     setScreen("tracking");
@@ -721,7 +765,7 @@ function App() {
   function applyRecommended() {
     const nextCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
     setCourtCount(nextCourts);
-    setRoundCount(recommendedRounds(players.length, nextCourts));
+    setRoundCount(completeCycleRoundCount(players, nextCourts, scheduleSeed));
   }
 
   function changeVenue(nextVenueId: VenueId) {
@@ -796,9 +840,12 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div>
+        <div className="brand-lockup">
+          <img className="brand-logo" src={LOGO_SRC} alt="Rally" />
+          <div>
           <p className="eyebrow">Padel event desk</p>
           <h1>Rally Americano</h1>
+          </div>
         </div>
         <div className="topbar-stats" aria-label="Event summary">
           <span>
@@ -809,12 +856,14 @@ function App() {
           </span>
           <span>{courtCount} courts</span>
           <span>{pointsPerGame} points</span>
+          <span>{automaticRoundCount} rounds</span>
         </div>
       </header>
 
       {screen === "setup" ? (
         <main className="start-screen">
           <section className="setup-panel start-panel" aria-label="Event setup">
+          <img className="start-logo" src={LOGO_SRC} alt="Rally" />
           <div className="section-title">
             <div>
               <p className="eyebrow">Roster first</p>
@@ -859,16 +908,10 @@ function App() {
                 onChange={(event) => setCourtCount(clamp(Number(event.target.value), 1, maxCourts))}
               />
             </label>
-            <label>
+            <div className="auto-rounds-card">
               <span>Rounds</span>
-              <input
-                type="number"
-                min={players.length < 4 ? 0 : 1}
-                max={72}
-                value={roundCount}
-                onChange={(event) => setRoundCount(clamp(Number(event.target.value), 0, 72))}
-              />
-            </label>
+              <strong>{automaticRoundCount}</strong>
+            </div>
           </div>
 
           <div className="player-entry">
@@ -1086,13 +1129,12 @@ function App() {
               </div>
 
               <div className="schedule-strip" aria-label="All rounds">
-                {schedule.map((round, index) => (
+                {schedule.slice(0, activeRound + 1).map((round, index) => (
                   <button
                     key={round.id}
                     type="button"
                     className={index === activeRound ? "active" : ""}
                     onClick={() => setActiveRound(index)}
-                    disabled={index > activeRound && !currentRoundComplete}
                   >
                     {round.number}
                   </button>
