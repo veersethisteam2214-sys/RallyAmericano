@@ -159,74 +159,45 @@ function generateCycle(roster, courtCount, roundCount, seed) {
 }
 
 function bestRoundPlan(args) {
-  const combos = partnerPairCombos(args.ids, Math.min(args.pairSlots, Math.floor(args.ids.length / 2)));
-  let best = null;
+  const used = new Set();
+  const partnerCounts = new Map();
+  const matches = [];
+  const partnerPairs = [];
+  const courts = Math.floor(args.pairSlots / 2);
 
-  combos.forEach((partnerPairs) => {
-    matchPairings(partnerPairs).forEach((matches) => {
-      const score = roundPlanScore({ ...args, partnerPairs, matches });
-      if (!best || score > best.score) best = { partnerPairs, matches, score };
-    });
+  pairsOf(args.ids).forEach((pair) => {
+    partnerCounts.set(pair, args.uncoveredPairs.has(pair) ? 0 : 1);
   });
 
-  return best ?? { partnerPairs: [], matches: [] };
-}
+  for (let court = 0; court < courts; court += 1) {
+    const candidate = bestCandidate({
+      ids: args.ids,
+      used,
+      playCounts: args.playCounts,
+      restCounts: args.restCounts,
+      partnerCounts,
+      opponentCounts: args.opponentCounts,
+      previousResting: args.previousResting,
+      freshPartnersNeeded: args.uncoveredPairs.size > 0,
+      seed: args.seed,
+      roundIndex: args.roundIndex,
+      court,
+    });
 
-function partnerPairCombos(ids, targetPairs) {
-  const allPairs = [];
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      allPairs.push([ids[i], ids[j]]);
-    }
+    if (!candidate) break;
+
+    const teamA = [candidate.teamA[0], candidate.teamA[1]];
+    const teamB = [candidate.teamB[0], candidate.teamB[1]];
+    matches.push({ teamA, teamB });
+    partnerPairs.push(teamA, teamB);
+    [...teamA, ...teamB].forEach((id) => used.add(id));
+    [teamA, teamB].forEach((pair) => {
+      const key = pairKey(pair[0], pair[1]);
+      partnerCounts.set(key, (partnerCounts.get(key) ?? 0) + 1);
+    });
   }
 
-  const combos = [];
-
-  function walk(start, chosen, used) {
-    if (chosen.length === targetPairs) {
-      combos.push(chosen.map((pair) => [...pair]));
-      return;
-    }
-
-    for (let index = start; index < allPairs.length; index += 1) {
-      const [a, b] = allPairs[index];
-      if (used.has(a) || used.has(b)) continue;
-      used.add(a);
-      used.add(b);
-      chosen.push([a, b]);
-      walk(index + 1, chosen, used);
-      chosen.pop();
-      used.delete(a);
-      used.delete(b);
-    }
-  }
-
-  walk(0, [], new Set());
-  return combos;
-}
-
-function matchPairings(partnerPairs) {
-  if (partnerPairs.length < 2) return [];
-  const plans = [];
-
-  function walk(remaining, matches) {
-    if (remaining.length === 0) {
-      plans.push(matches.map((match) => ({ teamA: [...match.teamA], teamB: [...match.teamB] })));
-      return;
-    }
-
-    const first = remaining[0];
-    for (let index = 1; index < remaining.length; index += 1) {
-      const next = remaining[index];
-      const rest = remaining.filter((_, restIndex) => restIndex !== 0 && restIndex !== index);
-      matches.push({ teamA: first, teamB: next });
-      walk(rest, matches);
-      matches.pop();
-    }
-  }
-
-  walk(partnerPairs, []);
-  return plans;
+  return { partnerPairs, matches, score: roundPlanScore({ ...args, partnerPairs, matches }) };
 }
 
 function roundPlanScore(args) {
@@ -263,6 +234,68 @@ function roundPlanScore(args) {
     (hashText(`${playing.join("")}_${resting.join("")}_${args.seed}_${args.roundIndex}`) % 1000) / 1000;
 
   return partnerCoverage + playBalance + restBalance + opponentNovelty + stableNoise;
+}
+
+function bestCandidate(args) {
+  const available = args.ids.filter((id) => !args.used.has(id));
+  if (available.length < 4) return null;
+
+  let best = null;
+
+  for (let a = 0; a < available.length - 3; a += 1) {
+    for (let b = a + 1; b < available.length - 2; b += 1) {
+      for (let c = b + 1; c < available.length - 1; c += 1) {
+        for (let d = c + 1; d < available.length; d += 1) {
+          const group = [available[a], available[b], available[c], available[d]];
+          const splits = [
+            { teamA: [group[0], group[1]], teamB: [group[2], group[3]] },
+            { teamA: [group[0], group[2]], teamB: [group[1], group[3]] },
+            { teamA: [group[0], group[3]], teamB: [group[1], group[2]] },
+          ];
+
+          for (const split of splits) {
+            const score = candidateScore(split, args);
+            if (!best || score > best.score) {
+              best = { ...split, score };
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function candidateScore(split, args) {
+  const group = [...split.teamA, ...split.teamB];
+  const minPlayed = Math.min(...Array.from(args.playCounts.values()));
+  const maxRested = Math.max(...Array.from(args.restCounts.values()));
+  const teammatePairs = [pairKey(split.teamA[0], split.teamA[1]), pairKey(split.teamB[0], split.teamB[1])];
+  const opponentPairs = split.teamA.flatMap((a) => split.teamB.map((b) => pairKey(a, b)));
+
+  const playBalance = group.reduce(
+    (sum, id) => sum + (minPlayed + 1 - (args.playCounts.get(id) ?? 0)) * 18,
+    0
+  );
+  const restBalance = group.reduce(
+    (sum, id) => sum + ((args.restCounts.get(id) ?? 0) - maxRested) * 4,
+    0
+  );
+  const restReturn = group.reduce((sum, id) => sum + (args.previousResting.has(id) ? 16 : 0), 0);
+  const partnerNovelty = teammatePairs.reduce((sum, key) => {
+    const previousPairings = args.partnerCounts.get(key) ?? 0;
+    if (!args.freshPartnersNeeded) return sum + 40 / (1 + previousPairings);
+    return sum + (previousPairings === 0 ? 1600 : -1600);
+  }, 0);
+  const opponentNovelty = opponentPairs.reduce(
+    (sum, key) => sum + 10 / (1 + (args.opponentCounts.get(key) ?? 0)),
+    0
+  );
+  const stableNoise =
+    (hashText(`${group.join("")}_${args.seed}_${args.roundIndex}_${args.court}`) % 1000) / 1000;
+
+  return playBalance + restBalance + restReturn + partnerNovelty + opponentNovelty + stableNoise;
 }
 
 function generateSchedule(roster, courtCount, roundCount, seed) {
@@ -347,7 +380,7 @@ function runScenario(playerCount) {
 }
 
 const results = Object.fromEntries(
-  [6, 7, 8, 9, 10, 11, 12].map((playerCount) => [`${playerCount}_players`, runScenario(playerCount)])
+  [6, 7, 8, 9, 10, 11, 12, 13, 14].map((playerCount) => [`${playerCount}_players`, runScenario(playerCount)])
 );
 
 console.log(JSON.stringify(results, null, 2));

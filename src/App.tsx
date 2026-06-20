@@ -319,77 +319,45 @@ function bestRoundPlan(args: {
   seed: number;
   roundIndex: number;
 }): RoundPlan {
-  const combos = partnerPairCombos(args.ids, Math.min(args.pairSlots, Math.floor(args.ids.length / 2)));
-  let best: RoundPlan | null = null;
+  const used = new Set<string>();
+  const partnerCounts = new Map<string, number>();
+  const matches: MatchPlan[] = [];
+  const partnerPairs: PartnerPair[] = [];
+  const courts = Math.floor(args.pairSlots / 2);
 
-  combos.forEach((partnerPairs) => {
-    const matchPlans = matchPairings(partnerPairs);
-    matchPlans.forEach((matches) => {
-      const score = roundPlanScore({ ...args, partnerPairs, matches });
-      if (!best || score > best.score) {
-        best = { partnerPairs, matches, score };
-      }
-    });
+  pairsOf(args.ids).forEach((pair) => {
+    partnerCounts.set(pair, args.uncoveredPairs.has(pair) ? 0 : 1);
   });
 
-  return best ?? { partnerPairs: [], matches: [], score: 0 };
-}
+  for (let court = 0; court < courts; court += 1) {
+    const candidate = bestCandidate({
+      ids: args.ids,
+      used,
+      playCounts: args.playCounts,
+      restCounts: args.restCounts,
+      partnerCounts,
+      opponentCounts: args.opponentCounts,
+      previousResting: args.previousResting,
+      freshPartnersNeeded: args.uncoveredPairs.size > 0,
+      seed: args.seed,
+      roundIndex: args.roundIndex,
+      court,
+    });
 
-function partnerPairCombos(ids: string[], targetPairs: number): PartnerPair[][] {
-  const allPairs: PartnerPair[] = [];
-  for (let i = 0; i < ids.length; i += 1) {
-    for (let j = i + 1; j < ids.length; j += 1) {
-      allPairs.push([ids[i], ids[j]]);
-    }
+    if (!candidate) break;
+
+    const teamA = [candidate.teamA[0], candidate.teamA[1]] as PartnerPair;
+    const teamB = [candidate.teamB[0], candidate.teamB[1]] as PartnerPair;
+    matches.push({ teamA, teamB });
+    partnerPairs.push(teamA, teamB);
+    [...teamA, ...teamB].forEach((id) => used.add(id));
+    [teamA, teamB].forEach((pair) => {
+      const key = pairKey(pair[0], pair[1]);
+      partnerCounts.set(key, (partnerCounts.get(key) ?? 0) + 1);
+    });
   }
 
-  const combos: PartnerPair[][] = [];
-
-  function walk(start: number, chosen: PartnerPair[], used: Set<string>) {
-    if (chosen.length === targetPairs) {
-      combos.push(chosen.map((pair) => [...pair] as PartnerPair));
-      return;
-    }
-
-    for (let index = start; index < allPairs.length; index += 1) {
-      const [a, b] = allPairs[index];
-      if (used.has(a) || used.has(b)) continue;
-      used.add(a);
-      used.add(b);
-      chosen.push([a, b]);
-      walk(index + 1, chosen, used);
-      chosen.pop();
-      used.delete(a);
-      used.delete(b);
-    }
-  }
-
-  walk(0, [], new Set());
-  return combos;
-}
-
-function matchPairings(partnerPairs: PartnerPair[]): MatchPlan[][] {
-  if (partnerPairs.length < 2) return [];
-  const plans: MatchPlan[][] = [];
-
-  function walk(remaining: PartnerPair[], matches: MatchPlan[]) {
-    if (remaining.length === 0) {
-      plans.push(matches.map((match) => ({ teamA: [...match.teamA] as PartnerPair, teamB: [...match.teamB] as PartnerPair })));
-      return;
-    }
-
-    const first = remaining[0];
-    for (let index = 1; index < remaining.length; index += 1) {
-      const next = remaining[index];
-      const rest = remaining.filter((_, restIndex) => restIndex !== 0 && restIndex !== index);
-      matches.push({ teamA: first, teamB: next });
-      walk(rest, matches);
-      matches.pop();
-    }
-  }
-
-  walk(partnerPairs, []);
-  return plans;
+  return { partnerPairs, matches, score: roundPlanScore({ ...args, partnerPairs, matches }) };
 }
 
 function roundPlanScore(args: {
