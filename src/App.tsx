@@ -319,6 +319,10 @@ function bestRoundPlan(args: {
   seed: number;
   roundIndex: number;
 }): RoundPlan {
+  if (args.ids.length <= 12) {
+    return exhaustiveRoundPlan(args);
+  }
+
   const used = new Set<string>();
   const partnerCounts = new Map<string, number>();
   const matches: MatchPlan[] = [];
@@ -358,6 +362,90 @@ function bestRoundPlan(args: {
   }
 
   return { partnerPairs, matches, score: roundPlanScore({ ...args, partnerPairs, matches }) };
+}
+
+function exhaustiveRoundPlan(args: {
+  ids: string[];
+  pairSlots: number;
+  playCounts: Map<string, number>;
+  restCounts: Map<string, number>;
+  opponentCounts: Map<string, number>;
+  uncoveredPairs: Set<string>;
+  previousResting: Set<string>;
+  seed: number;
+  roundIndex: number;
+}): RoundPlan {
+  const combos = partnerPairCombos(args.ids, Math.min(args.pairSlots, Math.floor(args.ids.length / 2)));
+  let best: RoundPlan | null = null;
+
+  combos.forEach((partnerPairs) => {
+    const matchPlans = matchPairings(partnerPairs);
+    matchPlans.forEach((matches) => {
+      const score = roundPlanScore({ ...args, partnerPairs, matches });
+      if (!best || score > best.score) {
+        best = { partnerPairs, matches, score };
+      }
+    });
+  });
+
+  return best ?? { partnerPairs: [], matches: [], score: 0 };
+}
+
+function partnerPairCombos(ids: string[], targetPairs: number): PartnerPair[][] {
+  const allPairs: PartnerPair[] = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    for (let j = i + 1; j < ids.length; j += 1) {
+      allPairs.push([ids[i], ids[j]]);
+    }
+  }
+
+  const combos: PartnerPair[][] = [];
+
+  function walk(start: number, chosen: PartnerPair[], used: Set<string>) {
+    if (chosen.length === targetPairs) {
+      combos.push(chosen.map((pair) => [...pair] as PartnerPair));
+      return;
+    }
+
+    for (let index = start; index < allPairs.length; index += 1) {
+      const [a, b] = allPairs[index];
+      if (used.has(a) || used.has(b)) continue;
+      used.add(a);
+      used.add(b);
+      chosen.push([a, b]);
+      walk(index + 1, chosen, used);
+      chosen.pop();
+      used.delete(a);
+      used.delete(b);
+    }
+  }
+
+  walk(0, [], new Set());
+  return combos;
+}
+
+function matchPairings(partnerPairs: PartnerPair[]): MatchPlan[][] {
+  if (partnerPairs.length < 2) return [];
+  const plans: MatchPlan[][] = [];
+
+  function walk(remaining: PartnerPair[], matches: MatchPlan[]) {
+    if (remaining.length === 0) {
+      plans.push(matches.map((match) => ({ teamA: [...match.teamA] as PartnerPair, teamB: [...match.teamB] as PartnerPair })));
+      return;
+    }
+
+    const first = remaining[0];
+    for (let index = 1; index < remaining.length; index += 1) {
+      const next = remaining[index];
+      const rest = remaining.filter((_, restIndex) => restIndex !== 0 && restIndex !== index);
+      matches.push({ teamA: first, teamB: next });
+      walk(rest, matches);
+      matches.pop();
+    }
+  }
+
+  walk(partnerPairs, []);
+  return plans;
 }
 
 function roundPlanScore(args: {
