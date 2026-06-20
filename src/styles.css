@@ -35,7 +35,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -215,9 +216,25 @@ input {
   outline: none;
 }
 
-input:focus {
+select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 9px 11px;
+  background: #ffffff;
+  color: var(--ink);
+  outline: none;
+}
+
+input:focus,
+select:focus {
   border-color: var(--green);
   box-shadow: 0 0 0 3px rgba(14, 124, 91, 0.16);
+}
+
+.venue-field {
+  grid-column: 1 / -1;
 }
 
 .player-entry {
@@ -401,6 +418,16 @@ input:focus {
   background: var(--green-dark);
   color: #ffffff;
   border-color: var(--green-dark);
+}
+
+.round-action-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.round-action-row .primary-button {
+  flex: 0 1 220px;
 }
 
 .empty-state {

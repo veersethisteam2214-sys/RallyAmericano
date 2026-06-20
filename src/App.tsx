@@ -3,6 +3,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  MapPin,
   Plus,
   RotateCcw,
   Shuffle,
@@ -43,8 +44,11 @@ type LeaderboardRow = {
   average: number;
 };
 
+type VenueId = "bangkok-paddle" | "sterling-sporting-center";
+
 type PersistedState = {
   players: Player[];
+  venueId: VenueId;
   pointsPerGame: number;
   courtCount: number;
   roundCount: number;
@@ -55,6 +59,23 @@ type PersistedState = {
 };
 
 const STORAGE_KEY = "rally-americano-state-v1";
+
+const venues: Record<
+  VenueId,
+  {
+    name: string;
+    courts: string[];
+  }
+> = {
+  "bangkok-paddle": {
+    name: "Bangkok Paddle",
+    courts: ["Obanji", "Pecunia"],
+  },
+  "sterling-sporting-center": {
+    name: "Sterling Sporting Center",
+    courts: ["Court 1", "Court 2"],
+  },
+};
 
 const starterPlayers: Player[] = [
   "Alex",
@@ -107,11 +128,15 @@ function recommendedCourts(playerCount: number) {
 function recommendedRounds(playerCount: number, courtCount: number) {
   if (playerCount < 4) return 0;
   const pairTotal = (playerCount * (playerCount - 1)) / 2;
-  return clamp(Math.ceil(pairTotal / Math.max(1, courtCount * 2)), 1, 24);
+  return clamp(Math.ceil(pairTotal / Math.max(1, courtCount * 2)), 1, 72);
 }
 
 function getPlayerName(players: Player[], id: string) {
   return players.find((player) => player.id === id)?.name ?? "Removed player";
+}
+
+function getCourtName(venueId: VenueId, court: number) {
+  return venues[venueId].courts[court - 1] ?? `Court ${court}`;
 }
 
 function generateSchedule(
@@ -123,10 +148,42 @@ function generateSchedule(
   const ids = players.map((player) => player.id);
   const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
   const rounds = Math.max(0, roundCount);
+  if (ids.length < 4 || rounds === 0) return [];
+
+  const baseCycleLength = recommendedRounds(ids.length, courts);
+  const baseCycle = generateCycle(players, courts, baseCycleLength, seed);
+
+  return Array.from({ length: rounds }, (_, index) => {
+    const template = baseCycle[index % baseCycle.length];
+    const cycleNumber = Math.floor(index / baseCycle.length) + 1;
+
+    return {
+      id: `round_${index + 1}_cycle_${cycleNumber}_${seed}`,
+      number: index + 1,
+      matches: template.matches.map((match) => ({
+        ...match,
+        id: `r${index + 1}_c${match.court}_${seed}`,
+        scoreA: undefined,
+        scoreB: undefined,
+      })),
+      resting: [...template.resting],
+    };
+  });
+}
+
+function generateCycle(
+  players: Player[],
+  courtCount: number,
+  roundCount: number,
+  seed: number
+): Round[] {
+  const ids = players.map((player) => player.id);
+  const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
   const playCounts = new Map<string, number>();
   const restCounts = new Map<string, number>();
   const partnerCounts = new Map<string, number>();
   const opponentCounts = new Map<string, number>();
+  const totalPartnerPairs = pairsOf(ids).length;
   let previousResting = new Set<string>();
 
   ids.forEach((id) => {
@@ -136,7 +193,7 @@ function generateSchedule(
 
   const schedule: Round[] = [];
 
-  for (let roundIndex = 0; roundIndex < rounds; roundIndex += 1) {
+  for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
     const used = new Set<string>();
     const matches: Match[] = [];
 
@@ -149,6 +206,7 @@ function generateSchedule(
         partnerCounts,
         opponentCounts,
         previousResting,
+        freshPartnersNeeded: countCoveredPartnerPairs(partnerCounts) < totalPartnerPairs,
         seed,
         roundIndex,
         court,
@@ -195,6 +253,10 @@ function generateSchedule(
   return schedule;
 }
 
+function countCoveredPartnerPairs(partnerCounts: Map<string, number>) {
+  return Array.from(partnerCounts.values()).filter((count) => count > 0).length;
+}
+
 function bestCandidate(args: {
   ids: string[];
   used: Set<string>;
@@ -203,6 +265,7 @@ function bestCandidate(args: {
   partnerCounts: Map<string, number>;
   opponentCounts: Map<string, number>;
   previousResting: Set<string>;
+  freshPartnersNeeded: boolean;
   seed: number;
   roundIndex: number;
   court: number;
@@ -251,6 +314,7 @@ function candidateScore(
     partnerCounts: Map<string, number>;
     opponentCounts: Map<string, number>;
     previousResting: Set<string>;
+    freshPartnersNeeded: boolean;
     seed: number;
     roundIndex: number;
     court: number;
@@ -271,10 +335,11 @@ function candidateScore(
     0
   );
   const restReturn = group.reduce((sum, id) => sum + (args.previousResting.has(id) ? 16 : 0), 0);
-  const partnerNovelty = teammatePairs.reduce(
-    (sum, key) => sum + 40 / (1 + (args.partnerCounts.get(key) ?? 0)),
-    0
-  );
+  const partnerNovelty = teammatePairs.reduce((sum, key) => {
+    const previousPairings = args.partnerCounts.get(key) ?? 0;
+    if (!args.freshPartnersNeeded) return sum + 40 / (1 + previousPairings);
+    return sum + (previousPairings === 0 ? 1600 : -1600);
+  }, 0);
   const opponentNovelty = opponentPairs.reduce(
     (sum, key) => sum + 10 / (1 + (args.opponentCounts.get(key) ?? 0)),
     0
@@ -342,7 +407,8 @@ function calculateLeaderboard(players: Player[], schedule: Round[], pointsPerGam
 function App() {
   const [players, setPlayers] = useState<Player[]>(starterPlayers);
   const [newPlayerName, setNewPlayerName] = useState("");
-  const [pointsPerGame, setPointsPerGame] = useState(24);
+  const [venueId, setVenueId] = useState<VenueId>("bangkok-paddle");
+  const [pointsPerGame, setPointsPerGame] = useState(20);
   const [courtCount, setCourtCount] = useState(2);
   const [roundCount, setRoundCount] = useState(7);
   const [activeRound, setActiveRound] = useState(0);
@@ -356,7 +422,8 @@ function App() {
     try {
       const parsed = JSON.parse(saved) as PersistedState;
       setPlayers(parsed.players?.length ? parsed.players : starterPlayers);
-      setPointsPerGame(parsed.pointsPerGame ?? 24);
+      setVenueId(parsed.venueId && venues[parsed.venueId] ? parsed.venueId : "bangkok-paddle");
+      setPointsPerGame(parsed.pointsPerGame ?? 20);
       setCourtCount(parsed.courtCount ?? 2);
       setRoundCount(parsed.roundCount ?? 7);
       setActiveRound(parsed.activeRound ?? 0);
@@ -371,6 +438,7 @@ function App() {
   useEffect(() => {
     const next: PersistedState = {
       players,
+      venueId,
       pointsPerGame,
       courtCount,
       roundCount,
@@ -380,19 +448,29 @@ function App() {
       scheduleSeed,
     };
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  }, [activeRound, courtCount, leaderboardVisible, players, pointsPerGame, roundCount, schedule, scheduleSeed]);
+  }, [activeRound, courtCount, leaderboardVisible, players, pointsPerGame, roundCount, schedule, scheduleSeed, venueId]);
 
   useEffect(() => {
-    const maxCourts = recommendedCourts(players.length);
+    const maxCourts = Math.min(recommendedCourts(players.length), venues[venueId].courts.length);
     setCourtCount((current) => clamp(current, 1, maxCourts));
-  }, [players.length]);
+  }, [players.length, venueId]);
 
   const leaderboard = useMemo(
     () => calculateLeaderboard(players, schedule, pointsPerGame),
     [players, pointsPerGame, schedule]
   );
   const active = schedule[activeRound];
-  const maxCourts = recommendedCourts(players.length);
+  const selectedVenue = venues[venueId];
+  const maxCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
+  const currentRoundComplete =
+    !!active &&
+    active.matches.length > 0 &&
+    active.matches.every(
+      (match) =>
+        typeof match.scoreA === "number" &&
+        typeof match.scoreB === "number" &&
+        match.scoreA + match.scoreB === pointsPerGame
+    );
   const coverage = useMemo(() => {
     const totalPairs = pairsOf(players.map((player) => player.id)).length;
     const partnerPairs = new Set<string>();
@@ -437,9 +515,28 @@ function App() {
   }
 
   function applyRecommended() {
-    const nextCourts = recommendedCourts(players.length);
+    const nextCourts = Math.min(recommendedCourts(players.length), selectedVenue.courts.length);
     setCourtCount(nextCourts);
     setRoundCount(recommendedRounds(players.length, nextCourts));
+  }
+
+  function changeVenue(nextVenueId: VenueId) {
+    setVenueId(nextVenueId);
+    setSchedule([]);
+    setActiveRound(0);
+  }
+
+  function goToNextRound() {
+    if (!schedule.length || !currentRoundComplete) return;
+    if (activeRound >= schedule.length - 1) {
+      const extendedSchedule = generateSchedule(players, courtCount, schedule.length + 1, scheduleSeed);
+      setSchedule((current) => [...current, extendedSchedule[current.length]]);
+      setActiveRound((current) => current + 1);
+      setRoundCount((current) => current + 1);
+      return;
+    }
+
+    setActiveRound((current) => current + 1);
   }
 
   function updateScore(roundId: string, matchId: string, side: "A" | "B", value: string) {
@@ -503,6 +600,9 @@ function App() {
           <span>
             <Users size={16} /> {players.length} players
           </span>
+          <span>
+            <MapPin size={16} /> {selectedVenue.name}
+          </span>
           <span>{courtCount} courts</span>
           <span>{pointsPerGame} points</span>
         </div>
@@ -521,6 +621,19 @@ function App() {
           </div>
 
           <div className="field-grid">
+            <label className="venue-field">
+              <span>Location</span>
+              <select
+                value={venueId}
+                onChange={(event) => changeVenue(event.target.value as VenueId)}
+              >
+                {Object.entries(venues).map(([id, venue]) => (
+                  <option key={id} value={id}>
+                    {venue.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label>
               <span>Points</span>
               <input
@@ -546,9 +659,9 @@ function App() {
               <input
                 type="number"
                 min={players.length < 4 ? 0 : 1}
-                max={48}
+                max={72}
                 value={roundCount}
-                onChange={(event) => setRoundCount(clamp(Number(event.target.value), 0, 48))}
+                onChange={(event) => setRoundCount(clamp(Number(event.target.value), 0, 72))}
               />
             </label>
           </div>
@@ -619,13 +732,13 @@ function App() {
             </button>
             <div>
               <p className="eyebrow">{completedMatches}/{totalMatches} matches scored</p>
-              <h2>{active ? `Round ${active.number}` : "No schedule"}</h2>
+              <h2>{active ? `Round ${active.number} of ${schedule.length}` : "No schedule"}</h2>
             </div>
             <button
               className="icon-button"
               type="button"
-              onClick={() => setActiveRound((current) => Math.min(schedule.length - 1, current + 1))}
-              disabled={!schedule.length || activeRound >= schedule.length - 1}
+              onClick={goToNextRound}
+              disabled={!currentRoundComplete}
               title="Next round"
             >
               <ChevronRight size={20} />
@@ -648,7 +761,7 @@ function App() {
                   <article className="match-card" key={match.id}>
                     <div className="court-lines" aria-hidden="true" />
                     <div className="match-heading">
-                      <span>Court {match.court}</span>
+                      <span>{getCourtName(venueId, match.court)}</span>
                       <strong>{pointsPerGame} total</strong>
                     </div>
                     <ScoreTeam
@@ -687,10 +800,23 @@ function App() {
                     type="button"
                     className={index === activeRound ? "active" : ""}
                     onClick={() => setActiveRound(index)}
+                    disabled={index > activeRound && !currentRoundComplete}
                   >
                     {round.number}
                   </button>
                 ))}
+              </div>
+
+              <div className="round-action-row">
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={goToNextRound}
+                  disabled={!currentRoundComplete}
+                >
+                  <ChevronRight size={18} />
+                  {activeRound >= schedule.length - 1 ? "Start Next Cycle" : "Next Round"}
+                </button>
               </div>
             </>
           )}
@@ -719,7 +845,7 @@ function App() {
                 <div className="leaderboard-name">
                   <strong>{row.name}</strong>
                   <span>
-                    {row.played} played · {row.wins} wins
+                    {row.played} played - {row.wins} wins
                   </span>
                 </div>
                 <div className="leaderboard-score">

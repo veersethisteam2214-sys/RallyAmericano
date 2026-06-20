@@ -6,14 +6,18 @@ game scores, and shows or hides a live leaderboard.
 
 ## Scoring Model
 
-- Each match is played to a fixed total selected before the event, such as 16,
-  24, or 32 points.
+- Each match is played to a fixed total selected before the event. The default
+  is 20 points.
 - The two team scores always add up to the selected match total.
 - Every player receives the points earned by their team in that match.
 - The leaderboard ranks players by total points, then point difference, then
   average points per match.
 - The generator favors fresh partners, fresh opponents, balanced play counts, and
   rotating rest players when the player count is not divisible by four.
+- After a full partner cycle is generated, extra rounds repeat from the first
+  round's matchups.
+- Venue selection controls court labels. Bangkok Paddle uses Obanji and Pecunia;
+  Sterling Sporting Center uses Court 1 and Court 2.
 
 ## Local Development
 
