@@ -102,6 +102,19 @@ function scheduleCoverage(players, schedule) {
 function generateCycle(roster, courtCount, roundCount, seed) {
   const ids = roster.map((player) => player.id);
   const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
+  const oneByeCycle = generateOneByeRoundRobinCycle(roster, courts, seed);
+  if (oneByeCycle.length > 0) {
+    return Array.from({ length: roundCount }, (_, index) => {
+      const template = oneByeCycle[index % oneByeCycle.length];
+      return {
+        ...template,
+        number: index + 1,
+        matches: template.matches.map((match) => ({ ...match })),
+        resting: [...template.resting],
+      };
+    });
+  }
+
   const pairSlots = courts * 2;
   const playCounts = new Map();
   const restCounts = new Map();
@@ -156,6 +169,54 @@ function generateCycle(roster, courtCount, roundCount, seed) {
   }
 
   return schedule;
+}
+
+function generateOneByeRoundRobinCycle(roster, courtCount, seed) {
+  const ids = roster.map((player) => player.id);
+  const playingCapacity = courtCount * 4;
+  if (ids.length !== playingCapacity + 1) return [];
+
+  const bye = "__REST__";
+  let rotation = [bye, ...ids];
+  const roundCount = rotation.length - 1;
+  const rounds = [];
+
+  for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
+    const pairings = [];
+    const resting = [];
+
+    for (let index = 0; index < rotation.length / 2; index += 1) {
+      const a = rotation[index];
+      const b = rotation[rotation.length - 1 - index];
+      if (a === bye || b === bye) {
+        resting.push(a === bye ? b : a);
+      } else {
+        pairings.push([a, b]);
+      }
+    }
+
+    rounds.push({
+      number: roundIndex + 1,
+      matches: pairings.reduce((matches, pair, index) => {
+        if (index % 2 === 0) {
+          const opponentPair = pairings[index + 1];
+          if (opponentPair) {
+            matches.push({
+              court: matches.length + 1,
+              teamA: pair,
+              teamB: opponentPair,
+            });
+          }
+        }
+        return matches;
+      }, []),
+      resting,
+    });
+
+    rotation = [rotation[0], rotation[rotation.length - 1], ...rotation.slice(1, -1)];
+  }
+
+  return rounds;
 }
 
 function bestRoundPlan(args) {
@@ -454,8 +515,30 @@ function runScenario(playerCount) {
   return result;
 }
 
+function runRepeatedCycleScenario(playerCount, cycleMultiplier) {
+  const players = makePlayers(playerCount);
+  const courtCount = 2;
+  const cycleRounds = completeCycleRoundCount(players, courtCount, 91 + playerCount);
+  const roundCount = cycleRounds * cycleMultiplier;
+  const scoredSchedule = scoreRandomly(generateSchedule(players, courtCount, roundCount, 91 + playerCount));
+  const result = summarize(players, scoredSchedule);
+
+  if (result.missingPairs.length > 0) {
+    throw new Error(`${playerCount} players repeated cycle missing partner pairs: ${result.missingPairs.join(", ")}`);
+  }
+
+  if (result.restSpread !== 0) {
+    throw new Error(`${playerCount} players repeated cycle rests should be exactly equal: spread ${result.restSpread}`);
+  }
+
+  return result;
+}
+
 const results = Object.fromEntries(
-  [6, 7, 8, 9, 10, 11, 12, 13, 14].map((playerCount) => [`${playerCount}_players`, runScenario(playerCount)])
+  [5, 6, 7, 8, 9, 10, 11, 12, 13, 14].map((playerCount) => [`${playerCount}_players`, runScenario(playerCount)])
 );
+
+results["5_players_2_cycles"] = runRepeatedCycleScenario(5, 2);
+results["9_players_2_cycles"] = runRepeatedCycleScenario(9, 2);
 
 console.log(JSON.stringify(results, null, 2));

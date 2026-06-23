@@ -248,6 +248,24 @@ function generateCycle(
 ): Round[] {
   const ids = players.map((player) => player.id);
   const courts = clamp(courtCount, 1, recommendedCourts(ids.length));
+  const oneByeCycle = generateOneByeRoundRobinCycle(players, courts, seed);
+  if (oneByeCycle.length > 0) {
+    return Array.from({ length: roundCount }, (_, index) => {
+      const template = oneByeCycle[index % oneByeCycle.length];
+      const cycleNumber = Math.floor(index / oneByeCycle.length) + 1;
+      return {
+        ...template,
+        id: `round_${index + 1}_cycle_${cycleNumber}_${seed}`,
+        number: index + 1,
+        matches: template.matches.map((match) => ({
+          ...match,
+          id: `r${index + 1}_c${match.court}_${seed}`,
+        })),
+        resting: [...template.resting],
+      };
+    });
+  }
+
   const pairSlots = courts * 2;
   const playCounts = new Map<string, number>();
   const restCounts = new Map<string, number>();
@@ -306,6 +324,56 @@ function generateCycle(
   }
 
   return schedule;
+}
+
+function generateOneByeRoundRobinCycle(players: Player[], courtCount: number, seed: number): Round[] {
+  const ids = players.map((player) => player.id);
+  const playingCapacity = courtCount * 4;
+  if (ids.length !== playingCapacity + 1) return [];
+
+  const bye = "__REST__";
+  let rotation = [bye, ...ids];
+  const roundCount = rotation.length - 1;
+  const rounds: Round[] = [];
+
+  for (let roundIndex = 0; roundIndex < roundCount; roundIndex += 1) {
+    const pairings: PartnerPair[] = [];
+    const resting: string[] = [];
+
+    for (let index = 0; index < rotation.length / 2; index += 1) {
+      const a = rotation[index];
+      const b = rotation[rotation.length - 1 - index];
+      if (a === bye || b === bye) {
+        resting.push(a === bye ? b : a);
+      } else {
+        pairings.push([a, b]);
+      }
+    }
+
+    rounds.push({
+      id: `round_${roundIndex + 1}_${seed}`,
+      number: roundIndex + 1,
+      matches: pairings.reduce<Match[]>((matches, pair, index) => {
+        if (index % 2 === 0) {
+          const opponentPair = pairings[index + 1];
+          if (opponentPair) {
+            matches.push({
+              id: `r${roundIndex + 1}_c${matches.length + 1}_${seed}`,
+              court: matches.length + 1,
+              teamA: pair,
+              teamB: opponentPair,
+            });
+          }
+        }
+        return matches;
+      }, []),
+      resting,
+    });
+
+    rotation = [rotation[0], rotation[rotation.length - 1], ...rotation.slice(1, -1)];
+  }
+
+  return rounds;
 }
 
 function bestRoundPlan(args: {
